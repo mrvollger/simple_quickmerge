@@ -29,8 +29,15 @@ def check_all_intersections(group):
 	return(False)
 
 def get_frac_coverage(group, r):
-	length = r.get_reference_length(group["REF"].iloc[0])
+	#length = r.get_reference_length(group["REF"].iloc[0])
+	length = group.REF_END.max() - group.REF_START.min()
 	covered = sum(group.REF_END - group.REF_START  )
+
+	#for query, qgroup in group.groupby("QUERY"):
+	#	qlength = sum(qgroup.Q_END - qgroup.QSTART)
+	#	qcoveraed = qlength / qgroup.
+	#	sys.stderr.write(query, qcovered)
+
 	return(covered/length)
 
 
@@ -67,7 +74,14 @@ def merge_pair(row, seq, q):
 	return(seq)
 
 def make_merge(group, r, q):
-	seq = r.fetch(group["REF"].iloc[0])
+	# limit REF seq to be at most the edges of the QUERY sequence
+	group = group.copy()
+	MIN = group.REF_START.min()
+	MAX = group.REF_END.max()
+	group.REF_START = group.REF_START - MIN
+	group.REF_END = group.REF_END - MIN
+
+	seq = r.fetch(group["REF"].iloc[0])[MIN:MAX+1]
 	for idx, row in group.iterrows():
 		seq = merge_pair(row, seq, q)
 	return(seq)
@@ -80,7 +94,7 @@ if __name__ == "__main__":
 	parser.add_argument("-o", help="output fasta file", required=True)
 	parser.add_argument("--ml", help="minimum overlap length (TODO)", type=int, default=5000)
 	parser.add_argument("--mincoverage", help="numeric option", type=float, default=0.98)
-	parser.add_argument("-l", help="minimum length for a reference anchor contig", type=int, default=2*10**6)
+	parser.add_argument("-l", help="minimum length for a reference anchor contig", type=int, default=10*10**6)
 	parser.add_argument('-d', help="store args.d as true if -d",  action="store_true", default=False)
 	args = parser.parse_args()
 	
@@ -100,6 +114,9 @@ if __name__ == "__main__":
 	merge["REF_LEN"] = merge.REF.map(r.get_reference_length)
 	merge["Q_LEN"] = merge.QUERY.map(q.get_reference_length)
 	
+	# remove references that are internal to the query OVERHANG==-1
+	merge = merge.loc[ merge.OVERHANG != -1 ]
+
 	out = open(args.o, "w+")
 	USED = set() # these contigs from the query have now been merged
 	counter = 1
@@ -119,13 +136,17 @@ if __name__ == "__main__":
 		elif( cov < args.mincoverage ):
 			if(args.d): sys.stderr.write(f"Skipped {ref} because {cov:.2f} is less than {args.mincoverage} coverage.\n")
 		else: # these are the valid overlaps
-			#print(group[small])
 			USED = USED.union(group.QUERY)	
+			seqns = ",".join(group.QUERY.iloc[::-1])
+			sys.stderr.write("\rMaking merge of: " + seqns)
+
+			name = ">merged{:08}\tmerged:".format(counter)  + seqns  + "\n"
 			seq = make_merge(group, r, q)
-			name = ">merged{:08}\tmerged:".format(counter)  + ",".join(group.QUERY.iloc[::-1])  + "\n"
 			out.write(name + seq + "\n")
 			#if(counter == 5): break
 			counter += 1
+
+	sys.stderr.write("\n")
 
 	for _, name in sorted(zip(q.lengths, q.references), reverse=True):
 		if(name not in USED):
